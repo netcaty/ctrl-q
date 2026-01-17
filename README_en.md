@@ -92,9 +92,6 @@ This tool is for learning and legitimate use only. The author is not responsible
 - C++ compiler (GCC/MinGW or MSVC)
 - Windows SDK (for Windows headers)
 
-### Build Script
-The project includes a `build.bat` script for easy compilation on Windows systems.
-
 ## Source Code
 
 The main source file is `main.cpp`. Key functions:

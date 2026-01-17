@@ -92,9 +92,6 @@ return
 - C++编译器（GCC/MinGW 或 MSVC）
 - Windows SDK（用于Windows头文件）
 
-### 构建脚本
-项目中包含一个 `build.bat` 脚本，可在Windows系统上轻松编译。
-
 ## 源代码
 
 主源文件为 `main.cpp`。关键函数：
