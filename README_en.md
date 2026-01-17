@@ -1,5 +1,7 @@
 # One-Click Exit Program Tool (Ctrl+Q)
 
+> [中文版](./README.md)[english](./README_en.md)
+
 A lightweight Windows tool for quickly exiting the current active window. Binds to the Ctrl+Q hotkey as an alternative to the system's ALT+F4.
 
 ## Features
