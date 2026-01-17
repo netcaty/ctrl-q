@@ -21,7 +21,7 @@ A lightweight Windows tool for quickly exiting the current active window. Binds 
 ### Using MinGW/GCC
 ```bash
 # Run in msys2 ucrt64 terminal
-g++ -o ctrlq.exe main.cpp -luser32 -lpsapi -O2 -mwindows -static
+g++ -o ctrlq.exe main.cpp -luser32 -lpsapi -O2 -mwindows -static -std=c++11
 ```
 
 ### Using MSVC
@@ -55,9 +55,11 @@ The program automatically protects the following critical system processes:
 ### Common Issues
 
 **Can't terminate certain processes?**
+
 Some protected processes require administrator privileges. Run the program as Administrator, or use the `/f` flag (use with caution).
 
 **The program flashes and disappears immediately?**
+
 When compiled with `-mwindows` (MinGW) or `/SUBSYSTEM:WINDOWS` (MSVC), the program runs silently without a console window. This is normal behavior.
 
 ## Technical Details

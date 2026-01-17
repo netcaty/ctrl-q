@@ -21,7 +21,7 @@
 ### 使用 MinGW/GCC
 ```bash
 # 在msys2 ucrt64终端运行
-g++ -o ctrlq.exe main.cpp -luser32 -lpsapi -O2 -mwindows -static
+g++ -o ctrlq.exe main.cpp -luser32 -lpsapi -O2 -mwindows -static -std=c++11
 ```
 
 ### 使用 MSVC
@@ -55,9 +55,11 @@ cl /EHsc /O2 main.cpp /Fe:ctrlq.exe user32.lib psapi.lib /link /SUBSYSTEM:WINDOW
 ### 常见问题
 
 **无法终止某些进程？**
+
 某些受保护的进程需要管理员权限。请以管理员身份运行程序，或使用 `/f` 标志（谨慎使用）。
 
 **程序一闪而过就消失了？**
+
 使用 `-mwindows`（MinGW）或 `/SUBSYSTEM:WINDOWS`（MSVC）编译时，程序会以无控制台窗口的方式静默运行，这是正常现象。
 
 ## 技术细节

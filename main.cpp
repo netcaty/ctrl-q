@@ -1,4 +1,4 @@
-// keyboard_hook.cpp - 全局键盘钩子版本
+// main.cpp - 全局键盘钩子版本
 #include <windows.h>
 #include <psapi.h>
 #include <iostream>
