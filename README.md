@@ -1,6 +1,6 @@
 # 一键退出程序的工具 (Ctrl+Q)
 
-> [中文版](./README.md)[english](./README_en.md)
+> [中文版](./README.md)  [english](./README_en.md)
 
 一个轻量级Windows工具，用于快速退出当前活动窗口。绑定Ctrl+Q快捷键，可替代系统的ALT+F4键。
 
