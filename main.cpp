@@ -1,4 +1,4 @@
-// main.cpp - 全局键盘钩子版本 v1.1
+// main.cpp - 全局键盘钩子版本 v1.1.1
 //
 // 架构：
 //   键盘钩子（主线程）  -> 只判断按键，命中后 PostMessage，立即返回
@@ -273,6 +273,15 @@ static bool IsAppWindow(HWND hwnd) {
 
 // ---------------------------------------------------------------- 关闭逻辑
 
+// 判据是"这个窗口还在不在"，不是"进程还在不在"。
+// 同时校验 PID，避免窗口销毁后 HWND 被系统回收给别的进程，误判成"还活着"。
+static bool WindowStillAlive(HWND hwnd, DWORD pid) {
+    if (!IsWindow(hwnd)) return false;
+    DWORD owner = 0;
+    GetWindowThreadProcessId(hwnd, &owner);
+    return owner == pid;
+}
+
 static void KillForeground() {
     HWND hwnd = GetForegroundWindow();
     if (!hwnd || !IsAppWindow(hwnd)) return;
@@ -308,19 +317,32 @@ static void KillForeground() {
         if (isCritical(h, &critical) && critical) { CloseHandle(h); return; }
     }
 
+    // 只关"这一个窗口"：成功后进程可能还活着（同一个 exe 的其它窗口），
+    // 那是应用自己的事，不能因为进程没退出就把它的所有窗口一起杀掉。
+    const DWORD budget = (DWORD)g_gracefulMs;
     const DWORD start = GetTickCount();
-    if (IsWindow(hwnd))
+
+    if (IsWindow(hwnd)) {
+        DWORD sendTimeout = budget / 2;
+        if (sendTimeout < 200) sendTimeout = 200;
         SendMessageTimeoutW(hwnd, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK,
-                            (UINT)g_gracefulMs, nullptr);
-
-    DWORD elapsed = GetTickCount() - start;
-    DWORD remain = (elapsed >= (DWORD)g_gracefulMs) ? 0 : (DWORD)g_gracefulMs - elapsed;
-
-    if (remain > 0 && WaitForSingleObject(h, remain) == WAIT_OBJECT_0) {
-        CloseHandle(h);
-        return;                                  // 已优雅退出
+                            sendTimeout, nullptr);
     }
 
+    // 等目标窗口消失；窗口没了 = 成功，进程留不留都无所谓
+    for (;;) {
+        if (!WindowStillAlive(hwnd, pid)) { CloseHandle(h); return; }
+        if (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) { CloseHandle(h); return; }
+
+        const DWORD elapsed = GetTickCount() - start;
+        if (elapsed >= budget) break;
+
+        DWORD slice = budget - elapsed;
+        if (slice > 50) slice = 50;
+        WaitForSingleObject(h, slice);
+    }
+
+    // 窗口一直没消失 = 应用没响应 WM_CLOSE（卡住或无窗口过程），才强杀进程
     if (canTerminate) TerminateProcess(h, 0);
     CloseHandle(h);
 }

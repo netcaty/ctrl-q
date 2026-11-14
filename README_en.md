@@ -6,7 +6,7 @@ A lightweight Windows utility that closes the foreground program with Ctrl+Q —
 
 ## Features
 
-- **One key close**: terminates the process that owns the foreground window
+- **One key close**: closes the foreground window; other windows of the same process stay open
 - **Never blocks input**: the keyboard hook only classifies the key and returns immediately; the close runs on a worker thread
 - **Graceful first**: sends `WM_CLOSE`, and only force-terminates after a timeout
 - **Layered protection**: skips critical system processes, desktop/taskbar windows, and refuses anything it cannot identify
@@ -118,8 +118,14 @@ worker thread                 OpenProcess(QUERY_LIMITED|SYNCHRONIZE|TERMINATE) o
                               ↓ the handle pins the object, so the PID cannot be recycled
                               QueryFullProcessImageNameW → three checks
                               ↓
-                              WM_CLOSE → WaitForSingleObject(handle, timeout) → TerminateProcess
+                              WM_CLOSE → poll until the window is gone → TerminateProcess
 ```
+
+Success is measured by **the target window disappearing**, not by the process exiting. When one exe
+owns several windows, closing one of them usually leaves the process alive — that is a success, not
+a failure, and it is not force-killed. Only a window that is still there after `GracefulTimeout`
+(hung app, or no `WM_CLOSE` handler) takes the whole process down. A few apps implement "close any
+window" as "quit the app"; that is the app's behaviour and the tool cannot change it.
 
 The important part: low-level hooks have a `LowLevelHooksTimeout` (300ms–1s by default). A slow
 callback makes Windows **silently uninstall** the hook with no notification. Therefore the hook
@@ -131,6 +137,10 @@ For learning and legitimate use only. Save your work first. The author is not re
 data loss or system issues caused by this tool.
 
 ## Version history
+
+### v1.1.1
+- Success criterion changed from "process exited" to "target window gone", so sibling windows are no longer closed
+- Tray icon now reflects enabled/disabled state (resource IDs 1 / 2)
 
 ### v1.1.0
 - Hook callback no longer blocks: close logic moved to a worker thread (fixes "works once, then dies")
