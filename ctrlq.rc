@@ -1,0 +1,10 @@
+// ctrlq.rc - 托盘图标资源
+//
+// ID 1 = 启用态（蓝底 + 红色关闭角标）
+// ID 2 = 停用态（整体去色变灰）
+// main.cpp 用 MAKEINTRESOURCEW(1 / 2) 加载。
+//
+// 图标源文件：make_icon.py（改配色后重跑即可重新生成两个 .ico）
+
+1 ICON "ctrlq.ico"
+2 ICON "ctrlq_off.ico"

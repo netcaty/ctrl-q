@@ -2,112 +2,145 @@
 
 > [中文版](./README.md)  [english](./README_en.md)
 
-A lightweight Windows tool for quickly exiting the current active window. Binds to the Ctrl+Q hotkey as an alternative to the system's ALT+F4.
+A lightweight Windows utility that closes the foreground program with Ctrl+Q — an alternative to Alt+F4.
 
 ## Features
 
-- **Quick Termination**: One-click termination of the process for the current active window
-- **Safety Protection**: Automatically avoids terminating critical system processes
-- **Intelligent Closure**: Attempts graceful closure first, then forces termination
-- **Portable Operation**: No installation required, single executable file
+- **One key close**: terminates the process that owns the foreground window
+- **Never blocks input**: the keyboard hook only classifies the key and returns immediately; the close runs on a worker thread
+- **Graceful first**: sends `WM_CLOSE`, and only force-terminates after a timeout
+- **Layered protection**: skips critical system processes, desktop/taskbar windows, and refuses anything it cannot identify
+- **Lives in the tray**: right-click to disable/enable, edit config, or exit
+- **Single instance**: no duplicated hooks from double-launching
+- **External config**: hotkey, timeout, and extra protection list live in `ctrlq.ini`
 
 ## Usage
 
-- Double-click the .exe to launch
-- It will run in the background. To exit, use Task Manager to find the `ctrlq` process and end it.
+1. Double-click `ctrlq.exe`; a tray icon appears
+2. Press `Ctrl+Q` in any window to close the process behind it
+3. Right-click the tray icon to disable/enable, edit `ctrlq.ini`, or exit
 
-## Compilation Guide
+## Configuration
 
-### Using MinGW/GCC
+On first run `ctrlq.ini` is created next to the exe (UTF-16, editable in Notepad):
+
+```ini
+[ctrlq]
+; Ctrl/Alt/Shift/Win + a letter, a digit, or F1-F24
+Hotkey=Ctrl+Q
+
+; milliseconds to wait after WM_CLOSE (200-30000)
+GracefulTimeout=3000
+
+; extra protected process names, comma separated
+Protected=
+```
+
+Restart the app after editing. An invalid `Hotkey` (e.g. no modifier) falls back to `Ctrl+Q`.
+
+## Start at logon
+
+User-mode apps on Windows start at **logon**. Put `ctrlq.exe` into your Startup folder:
+
+1. Press `Win+R`, type `shell:startup`, hit Enter
+2. Put a **shortcut** to `ctrlq.exe` (not the exe itself) into that folder
+3. It starts on your next logon
+
+Notes:
+
+- No admin rights and no UAC prompt.
+- The shortcut points at a **fixed path**; recreate it after moving or renaming the exe.
+- `ctrlq.ini` is located next to the exe, so autostart does not change config resolution.
+- The single-instance mutex lives in the `Local\` namespace (per logon session), so multiple users
+  can each run their own copy.
+
+## Building
+
+### MinGW / GCC
 ```bash
-# Run in msys2 ucrt64 terminal
-g++ -o ctrlq.exe main.cpp -luser32 -lpsapi -O2 -mwindows -static -std=c++11
+windres ctrlq.rc -O coff -o ctrlq_res.o
+g++ -o ctrlq.exe main.cpp ctrlq_res.o -luser32 -lshell32 -O2 -mwindows -static -std=c++11
 ```
 
-### Using MSVC
-```bash
-# Run in Visual Studio Developer Command Prompt
-cl /EHsc /O2 main.cpp /Fe:ctrlq.exe user32.lib psapi.lib /link /SUBSYSTEM:WINDOWS
+### MSVC
+```bat
+rc /fo ctrlq.res ctrlq.rc
+cl /EHsc /utf-8 /O2 main.cpp ctrlq.res /Fe:ctrlq.exe user32.lib shell32.lib /link /SUBSYSTEM:WINDOWS
 ```
 
-## Safety Features
+> `/utf-8` is required, otherwise the Chinese menu strings are decoded with the system code page.
 
-The program automatically protects the following critical system processes:
-- `csrss.exe` - Windows Client Server Runtime Process
-- `wininit.exe` - Windows Initialization Process
-- `winlogon.exe` - Windows Logon Application
-- `services.exe` - Service Control Manager
-- `lsass.exe` - Local Security Authority Subsystem Service
-- `smss.exe` - Session Manager Subsystem
-- `System` - System Idle Process
-- `explorer.exe` - Windows Explorer
+### Tray icon
 
-## Exit Codes
+`ctrlq.rc` embeds two icons: resource ID 1 for the enabled state (blue badge + window outline
++ red close badge), ID 2 for the disabled state (desaturated grey). The icon switches together
+with the "Enable / Disable" menu item, and stays legible on both light and dark taskbars.
 
-- `0`: Success (Process terminated)
-- `1`: Failed to get process information
-- `2`: Attempted to terminate a critical system process
-- `3`: Attempted to terminate itself
-- `4`: Failed to terminate the process
+Each .ico holds nine 32bpp sizes (16/20/24/32/40/48/64/128/256). The 16/20/24 variants use
+thicker strokes so the shape survives at tray size. The design source is `make_icon.py`
+(requires Pillow); run `python make_icon.py` to regenerate both .ico files and `icon_preview.png`.
 
-## Troubleshooting
+> Building without the resource script still works, but the tray falls back to the stock
+> `IDI_APPLICATION` icon.
+>
+> If `windres` fails with `cannot execute 'cc1'`, the gcc on PATH is a shim that cannot find its
+> `libexec` directory; put the matching MinGW `mingw64/bin` first on PATH.
 
-### Common Issues
+## Safety
 
-**Can't terminate certain processes?**
+Three checks run in order; failing any one aborts the operation:
 
-Some protected processes require administrator privileges. Run the program as Administrator, or use the `/f` flag (use with caution).
+1. **Critical process**: `IsProcessCritical()` (Windows 8.1+), decided by the kernel
+2. **Built-in guard list**: `explorer.exe`, `dwm.exe`, `sihost.exe`, `taskhostw.exe`,
+   `ShellExperienceHost.exe`, `StartMenuExperienceHost.exe`, `ctfmon.exe`, `audiodg.exe`,
+   `fontdrvhost.exe`, `csrss.exe`, `winlogon.exe`, `lsass.exe`, plus your `Protected=` entries
+3. **Window admission**: the target must be a visible top-level window with a title, not a
+   `WS_EX_TOOLWINDOW`, and not a shell window (`Progman`, `WorkerW`, `Shell_TrayWnd`, ...)
 
-**The program flashes and disappears immediately?**
+If the process path cannot be read, the tool **gives up** instead of killing an unknown PID.
 
-When compiled with `-mwindows` (MinGW) or `/SUBSYSTEM:WINDOWS` (MSVC), the program runs silently without a console window. This is normal behavior.
+## Known limitations
 
-## Technical Details
+- **Elevated windows**: a non-elevated instance cannot receive keystrokes while an elevated
+  window is focused, nor terminate it. Run `ctrlq.exe` as administrator for those.
+- **Data loss**: if the app ignores `WM_CLOSE` (e.g. shows a save prompt), it is force-killed
+  after `GracefulTimeout`.
+- **Windows without a title**: some fullscreen games and UWP shell windows are skipped.
 
-### How It Works
-1. Registers a keyboard hook to listen for the Ctrl+Q key combination
-2. Uses `GetForegroundWindow()` to get the current focused window
-3. Gets the Process ID via `GetWindowThreadProcessId()`
-4. Attempts to send a `WM_CLOSE` message for graceful window closure
-5. If the window doesn't close, forcefully terminates the process
+## How it works
 
-## Alternatives
-
-### AutoHotkey Version
-```autohotkey
-; Save as ctrlq.ahk
-^q::
-    WinGet, active_pid, PID, A
-    Process, Close, %active_pid%
-return
 ```
+keyboard hook (main thread)   classify the key, PostMessage, return 1 to swallow it
+    ↓
+hidden window (main thread)   on WM_APP_KILL: SetEvent, nothing else
+    ↓
+worker thread                 OpenProcess(QUERY_LIMITED|SYNCHRONIZE|TERMINATE) once
+                              ↓ the handle pins the object, so the PID cannot be recycled
+                              QueryFullProcessImageNameW → three checks
+                              ↓
+                              WM_CLOSE → WaitForSingleObject(handle, timeout) → TerminateProcess
+```
+
+The important part: low-level hooks have a `LowLevelHooksTimeout` (300ms–1s by default). A slow
+callback makes Windows **silently uninstall** the hook with no notification. Therefore the hook
+only posts a message; everything else happens on the worker thread.
 
 ## Disclaimer
 
-This tool is for learning and legitimate use only. The author is not responsible for any data loss, system damage, or other issues caused by using this tool. Please save your work and use with caution.
+For learning and legitimate use only. Save your work first. The author is not responsible for
+data loss or system issues caused by this tool.
 
-## Building from Source
+## Version history
 
-### Prerequisites
-- C++ compiler (GCC/MinGW or MSVC)
-- Windows SDK (for Windows headers)
-
-## Source Code
-
-The main source file is `main.cpp`. Key functions:
-- `WinMain()`: Windows application entry point
-- `GetRealForegroundWindow()`: Gets the active window
-- `TerminateProcessByPid()`: Terminates a process by its ID
-- `GetProcessName()`: Gets the executable name from a process ID
-
-## Contribution Guidelines
-
-Issues and Pull Requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
-
-## Version History
+### v1.1.0
+- Hook callback no longer blocks: close logic moved to a worker thread (fixes "works once, then dies")
+- Fails closed when the process cannot be identified
+- Holds a single process handle for the whole operation, eliminating PID-reuse kills
+- Uses `QueryFullProcessImageNameW` + `PROCESS_QUERY_LIMITED_INFORMATION`
+- Protection reworked: `IsProcessCritical` + window admission + configurable list
+- Swallows the hotkey instead of forwarding it to the foreground app
+- Ignores injected keys and auto-repeat; modifier state is tracked manually
+- Added tray icon, single instance, and `ctrlq.ini`
 
 ### v1.0.0
-- Initial release
-- Basic process termination functionality
-- Critical process protection
-- Multiple operation modes
+- Initial release: global hook + WM_CLOSE / force terminate

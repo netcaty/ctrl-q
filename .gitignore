@@ -1,0 +1,25 @@
+# 编译中间产物（注意：不忽略 *.exe，ctrlq.exe 是要提交的）
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.a
+*.stackdump
+a.exe
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+*.user
+*.suo
+
+# 本地临时文件
+*.log
+*.tmp
+*.bak
+*~
+
+# 本机 Agent 工作记录
+.workbuddy/

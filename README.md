@@ -2,112 +2,144 @@
 
 > [中文版](./README.md)  [english](./README_en.md)
 
-一个轻量级Windows工具，用于快速退出当前活动窗口。绑定Ctrl+Q快捷键，可替代系统的ALT+F4键。
+一个轻量级 Windows 工具，用 Ctrl+Q 关闭当前前台程序，可替代系统的 Alt+F4。
 
 ## 功能特点
 
-- **快速终止**：一键终止当前活动窗口的进程
-- **安全保护**：自动避免终止关键系统进程
-- **智能关闭**：先尝试正常关闭，再强制终止
-- **便携运行**：无需安装，单个可执行文件
+- **一键关闭**：结束当前前台窗口所属的进程
+- **不卡输入**：键盘钩子只做按键判断，关闭动作交给独立工作线程
+- **智能关闭**：先发 `WM_CLOSE` 优雅关闭，超时才强制结束
+- **多层保护**：跳过关键系统进程、桌面/任务栏窗口；识别不出进程就不动手
+- **托盘常驻**：右键托盘图标可停用/启用（图标同步变灰）、编辑配置、退出
+- **单实例**：重复启动不会装两个钩子
+- **配置外置**：热键、超时时间、额外保护名单都在 `ctrlq.ini`
 
 ## 使用方法
 
-- 双击exe启动
-- 在后台常驻内存，退出用任务管理器查找ctrlq进程然后杀死
+1. 双击 `ctrlq.exe`，托盘出现图标
+2. 在任意窗口按 `Ctrl+Q`，该窗口所属的进程会被关闭
+3. 右键托盘图标：
+   - 停用 / 启用
+   - 编辑配置（`ctrlq.ini`）
+   - 退出
 
-## 编译指南
+## 配置文件
 
-### 使用 MinGW/GCC
-```bash
-# 在msys2 ucrt64终端运行
-g++ -o ctrlq.exe main.cpp -luser32 -lpsapi -O2 -mwindows -static -std=c++11
+首次运行会在 exe 同目录生成 `ctrlq.ini`（UTF-16 编码，记事本可直接编辑）：
+
+```ini
+[ctrlq]
+; Ctrl/Alt/Shift/Win + 单个字母、数字，或 F1-F24
+Hotkey=Ctrl+Q
+
+; 优雅关闭的等待时间（毫秒，200-30000）
+GracefulTimeout=3000
+
+; 额外保护的进程名，逗号分隔
+Protected=
 ```
 
-### 使用 MSVC
+修改后需重启程序生效。若把 `Hotkey` 写成非法值（例如没有修饰键的裸键），会自动回落到 `Ctrl+Q`。
+
+## 开机自启
+
+Windows 的用户态程序实际都是**登录后**启动。把 `ctrlq.exe` 放进当前用户的启动文件夹即可：
+
+1. `Win+R` 输入 `shell:startup` 回车，打开启动文件夹
+2. 把 `ctrlq.exe` 的**快捷方式**（不是 exe 本身）放进去
+3. 下次登录自动启动
+
+说明：
+
+- 不需要管理员权限，不会弹 UAC。
+- 快捷方式指向**固定路径**，移动或重命名 exe 后要重建。
+- `ctrlq.ini` 按 exe 所在目录查找，自启不影响配置读取。
+- 单实例锁是 `Local\` 命名空间（按登录会话），多用户各自登录互不影响。
+
+## 编译
+
+### MinGW / GCC
 ```bash
-# 在 Visual Studio 开发者命令提示符中运行
-cl /EHsc /O2 main.cpp /Fe:ctrlq.exe user32.lib psapi.lib /link /SUBSYSTEM:WINDOWS
+windres ctrlq.rc -O coff -o ctrlq_res.o
+g++ -o ctrlq.exe main.cpp ctrlq_res.o -luser32 -lshell32 -O2 -mwindows -static -std=c++11
 ```
+
+### MSVC
+```bat
+rc /fo ctrlq.res ctrlq.rc
+cl /EHsc /utf-8 /O2 main.cpp ctrlq.res /Fe:ctrlq.exe user32.lib shell32.lib /link /SUBSYSTEM:WINDOWS
+```
+
+> `/utf-8` 不能省，否则源码里的中文菜单文本会按系统代码页解析成乱码。
+
+### 托盘图标
+
+`ctrlq.rc` 把两个图标编进 exe：资源 ID 1 为启用态（蓝色徽章 + 窗口轮廓 + 红色关闭角标），
+ID 2 为停用态（去色变灰）。右键「停用 / 启用」时图标会同步切换，浅色和深色任务栏都清晰。
+
+每个 ico 内含 16/20/24/32/40/48/64/128/256 共九档 32bpp 尺寸；16/20/24 三档单独加粗了
+线条和叉号，避免缩到托盘大小糊成一团。设计源码是 `make_icon.py`（需要 Pillow），
+改配色后执行 `python make_icon.py` 即可重新生成两个 ico 和 `icon_preview.png`。
+
+> 不带资源文件编译也能运行，只是托盘图标会回落到系统默认的 `IDI_APPLICATION`。
+>
+> 若 `windres` 报 `cannot execute 'cc1'`，是 PATH 里的 gcc 为链接垫片、找不到同目录的
+> `libexec`；把对应 MinGW 的 `mingw64/bin` 放到 PATH 最前面即可。
 
 ## 安全特性
 
-程序会自动保护以下关键系统进程：
-- `csrss.exe` - Windows客户端服务器运行时进程
-- `wininit.exe` - Windows初始化进程
-- `winlogon.exe` - Windows登录应用程序
-- `services.exe` - 服务控制管理器
-- `lsass.exe` - 本地安全认证子系统进程
-- `smss.exe` - 会话管理器子系统
-- `System` - 系统空闲进程
-- `explorer.exe` - Windows资源管理器
+关闭前依次通过三层检查，任一不通过就直接放弃：
 
-## 退出代码
+1. **系统关键进程**：`IsProcessCritical()`（Windows 8.1+），由内核判定
+2. **内置保护名单**：`explorer.exe`、`dwm.exe`、`sihost.exe`、`taskhostw.exe`、
+   `ShellExperienceHost.exe`、`StartMenuExperienceHost.exe`、`ctfmon.exe`、`audiodg.exe`、
+   `fontdrvhost.exe`、`csrss.exe`、`winlogon.exe`、`lsass.exe` 等，外加 `Protected=` 自定义名单
+3. **窗口准入**：必须是可见的顶层窗口、非 `WS_EX_TOOLWINDOW`、有标题，
+   且类名不是 `Progman` / `WorkerW` / `Shell_TrayWnd` 等桌面与任务栏窗口
 
-- `0`：成功（进程已终止）
-- `1`：无法获取进程信息
-- `2`：尝试终止关键系统进程
-- `3`：尝试终止自身
-- `4`：终止进程失败
+另外：读不到进程路径时**直接放弃**，不会拿着未知 PID 去杀。
 
-## 故障排除
+## 已知限制
 
-### 常见问题
-
-**无法终止某些进程？**
-
-某些受保护的进程需要管理员权限。请以管理员身份运行程序，或使用 `/f` 标志（谨慎使用）。
-
-**程序一闪而过就消失了？**
-
-使用 `-mwindows`（MinGW）或 `/SUBSYSTEM:WINDOWS`（MSVC）编译时，程序会以无控制台窗口的方式静默运行，这是正常现象。
+- **管理员窗口**：普通权限运行的本程序收不到高完整性窗口的按键，也无法结束它们。
+  需要处理这类窗口时，以管理员身份运行 `ctrlq.exe`。
+- **强制结束会丢数据**：程序不响应 `WM_CLOSE`（例如弹出"是否保存"对话框）时，
+  等待 `GracefulTimeout` 后会被强杀。
+- **无标题窗口**：部分全屏游戏、UWP 外壳窗口没有标题，会被跳过。
 
 ## 技术细节
 
-### 工作原理
-1. 注册键盘钩子，监听ctrl+q按键
-2. 使用 `GetForegroundWindow()` 获取当前焦点窗口
-3. 通过 `GetWindowThreadProcessId()` 获取进程ID
-4. 尝试发送 `WM_CLOSE` 消息正常关闭窗口
-5. 如果窗口未关闭，则强制终止进程
-
-## 替代方案
-
-### AutoHotkey 版本
-```autohotkey
-; 保存为 ctrlq.ahk
-^q::
-    WinGet, active_pid, PID, A
-    Process, Close, %active_pid%
-return
 ```
+键盘钩子（主线程）  只判断按键，命中后 PostMessage，立即 return 1 吞掉按键
+    ↓
+隐藏窗口（主线程）  收到 WM_APP_KILL，SetEvent 唤醒工作线程
+    ↓
+工作线程            OpenProcess(QUERY_LIMITED|SYNCHRONIZE|TERMINATE) 一次拿到句柄
+                    ↓ 句柄不关，PID 不会被复用
+                    QueryFullProcessImageNameW → 三层检查
+                    ↓
+                    WM_CLOSE → WaitForSingleObject(句柄, 超时) → 超时才 TerminateProcess
+```
+
+关键点：低层键盘钩子有 `LowLevelHooksTimeout`（默认 300ms~1s），回调里做耗时操作会被
+Windows **静默卸载**且不做任何提示。所以钩子内只允许 `PostMessage`，关闭流程全部在
+工作线程里跑。
 
 ## 免责声明
 
-本工具仅供学习和合法用途使用。使用本工具造成的任何数据丢失、系统损坏或其他问题，作者概不负责。使用前请保存好工作，谨慎操作。
-
-## 从源代码构建
-
-### 前提条件
-- C++编译器（GCC/MinGW 或 MSVC）
-- Windows SDK（用于Windows头文件）
-
-## 源代码
-
-主源文件为 `main.cpp`。关键函数：
-- `WinMain()`：Windows应用程序入口点
-- `GetRealForegroundWindow()`：获取活动窗口
-- `TerminateProcessByPid()`：通过ID终止进程
-- `GetProcessName()`：从进程ID获取可执行文件名称
-
-## 贡献指南
-
-欢迎提交 Issue 和 Pull Request。对于重大改动，请先开 Issue 讨论您想要更改的内容。
+本工具仅供学习和合法用途使用。使用前请保存好工作。因使用本工具造成的数据丢失或系统问题，作者不负责。
 
 ## 版本历史
 
+### v1.1.0
+- 钩子回调不再阻塞：关闭流程移入工作线程，修复"按一次后快捷键失效"
+- 进程识别失败时直接放弃，不再假定安全
+- 全程持有进程句柄，消除 PID 复用导致的误杀
+- 改用 `QueryFullProcessImageNameW` + `PROCESS_QUERY_LIMITED_INFORMATION`
+- 保护策略改为 `IsProcessCritical` + 窗口准入 + 可配置名单
+- 命中后吞掉按键，不再与前台程序自带的 Ctrl+Q 冲突
+- 忽略合成按键与自动重复；修饰键状态自行维护
+- 新增托盘图标、单实例、`ctrlq.ini` 配置
+
 ### v1.0.0
-- 初始版本
-- 基本的进程终止功能
-- 关键进程保护
-- 多种操作模式
+- 初始版本：全局钩子 + WM_CLOSE/强制终止
