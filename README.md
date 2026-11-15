@@ -35,6 +35,9 @@ Hotkey=Ctrl+Q
 ; 优雅关闭的等待时间（毫秒，200-30000）
 GracefulTimeout=3000
 
+; 是否允许关闭资源管理器窗口（1=允许，0=禁止）
+AllowShellClose=1
+
 ; 额外保护的进程名，逗号分隔
 Protected=
 ```
@@ -91,11 +94,23 @@ ID 2 为停用态（去色变灰）。右键「停用 / 启用」时图标会同
 关闭前依次通过三层检查，任一不通过就直接放弃：
 
 1. **系统关键进程**：`IsProcessCritical()`（Windows 8.1+），由内核判定
-2. **内置保护名单**：`explorer.exe`、`dwm.exe`、`sihost.exe`、`taskhostw.exe`、
-   `ShellExperienceHost.exe`、`StartMenuExperienceHost.exe`、`ctfmon.exe`、`audiodg.exe`、
-   `fontdrvhost.exe`、`csrss.exe`、`winlogon.exe`、`lsass.exe` 等，外加 `Protected=` 自定义名单
+2. **内置保护名单**：`dwm.exe`、`sihost.exe`、`taskhostw.exe`、`ShellExperienceHost.exe`、
+   `StartMenuExperienceHost.exe`、`ctfmon.exe`、`audiodg.exe`、`fontdrvhost.exe`、
+   `csrss.exe`、`winlogon.exe`、`lsass.exe` 等，外加 `Protected=` 自定义名单
 3. **窗口准入**：必须是可见的顶层窗口、非 `WS_EX_TOOLWINDOW`、有标题，
    且类名不是 `Progman` / `WorkerW` / `Shell_TrayWnd` 等桌面与任务栏窗口
+
+进程按风险分三档处理：
+
+| 档位 | 对象 | 行为 |
+|---|---|---|
+| `Deny` | 关键进程、内置名单、`Protected=` | 直接放弃 |
+| `GracefulOnly` | `explorer.exe` | 只发 `WM_CLOSE`，**永不强杀** |
+| `Allow` | 其他进程 | `WM_CLOSE`，超时才强杀 |
+
+`explorer.exe` 同时托管桌面、任务栏和文件夹窗口，所以额外加了两道限制：只放行
+`CabinetWClass` / `ExploreWClass` 的文件夹窗口，并用 `GetShellWindow()` 排除桌面窗口。
+`AllowShellClose=0` 可以让它彻底回到 `Deny` 档。
 
 另外：读不到进程路径时**直接放弃**，不会拿着未知 PID 去杀。
 
@@ -106,6 +121,9 @@ ID 2 为停用态（去色变灰）。右键「停用 / 启用」时图标会同
 - **强制结束会丢数据**：程序不响应 `WM_CLOSE`（例如弹出"是否保存"对话框）时，
   等待 `GracefulTimeout` 后会被强杀。
 - **无标题窗口**：部分全屏游戏、UWP 外壳窗口没有标题，会被跳过。
+- **资源管理器不会强杀**：`explorer.exe` 只做优雅关闭。窗口卡住时 Ctrl+Q 会无反应，
+  这是刻意的——强杀会闪掉桌面和任务栏，并丢失所有已打开的文件夹窗口。
+- **资源管理器多标签**：Windows 11 中一个窗口的多个标签会被一起关掉，属于应用自身行为。
 
 ## 技术细节
 
@@ -116,9 +134,9 @@ ID 2 为停用态（去色变灰）。右键「停用 / 启用」时图标会同
     ↓
 工作线程            OpenProcess(QUERY_LIMITED|SYNCHRONIZE|TERMINATE) 一次拿到句柄
                     ↓ 句柄不关，PID 不会被复用
-                    QueryFullProcessImageNameW → 三层检查
+                    QueryFullProcessImageNameW → 分档判定（Deny / GracefulOnly / Allow）
                     ↓
-                    WM_CLOSE → 轮询目标窗口是否消失 → 窗口仍在才 TerminateProcess
+                    WM_CLOSE → 轮询目标窗口是否消失 → 仅 Allow 档才 TerminateProcess
 ```
 
 关键点：低层键盘钩子有 `LowLevelHooksTimeout`（默认 300ms~1s），回调里做耗时操作会被
@@ -135,6 +153,12 @@ Windows **静默卸载**且不做任何提示。所以钩子内只允许 `PostMe
 本工具仅供学习和合法用途使用。使用前请保存好工作。因使用本工具造成的数据丢失或系统问题，作者不负责。
 
 ## 版本历史
+
+### v1.1.2
+- 支持关闭资源管理器文件夹窗口：`explorer.exe` 拆出 `GracefulOnly` 档，只做优雅关闭
+- 该档额外限制为 `CabinetWClass` / `ExploreWClass` 窗口，桌面与任务栏不受影响
+- 新增 `AllowShellClose` 开关，可整体禁用这一行为
+- 新增 `CloseAppWindow(HWND)` 入口，便于测试单个窗口的关闭行为
 
 ### v1.1.1
 - 关闭判据从"进程退出"改为"目标窗口消失"：同进程的多个窗口不再被一起关掉

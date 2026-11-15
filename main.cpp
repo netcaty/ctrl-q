@@ -1,4 +1,4 @@
-// main.cpp - 全局键盘钩子版本 v1.1.1
+// main.cpp - 全局键盘钩子版本 v1.1.2
 //
 // 架构：
 //   键盘钩子（主线程）  -> 只判断按键，命中后 PostMessage，立即返回
@@ -38,13 +38,22 @@ static const UINT ID_TRAY_EXIT = 1003;
 static const wchar_t* const kBuiltinProtected[] = {
     L"csrss.exe", L"wininit.exe", L"winlogon.exe", L"services.exe",
     L"lsass.exe", L"smss.exe", L"userinit.exe", L"logonui.exe",
-    L"explorer.exe", L"dwm.exe", L"sihost.exe", L"taskhostw.exe",
+    L"dwm.exe", L"sihost.exe", L"taskhostw.exe",
     L"shellexperiencehost.exe", L"startmenuexperiencehost.exe",
     L"searchhost.exe", L"searchui.exe", L"textinputhost.exe",
     L"ctfmon.exe", L"audiodg.exe", L"fontdrvhost.exe",
     L"runtimebroker.exe", L"smartscreen.exe", L"msmpeng.exe",
     L"system", L"registry", L"memory compression",
 };
+
+// 只允许优雅关闭、永不强杀的进程。
+// explorer.exe 同时是桌面和任务栏的宿主：强杀会闪掉整个外壳并丢失所有文件夹窗口，
+// 但它的文件夹窗口本身是可以正常关闭的，所以单独给一档策略。
+static const wchar_t* const kGracefulOnly[] = {
+    L"explorer.exe",
+};
+
+enum Policy { POLICY_ALLOW, POLICY_GRACEFUL_ONLY, POLICY_DENY };
 
 struct Hotkey {
     UINT vk = 'Q';
@@ -66,6 +75,7 @@ static HANDLE    g_hMutex = nullptr;
 
 static Hotkey    g_hotkey;
 static int       g_gracefulMs = 3000;
+static bool      g_allowShellClose = true;
 static std::vector<std::wstring> g_extraProtected;
 
 static bool      g_enabled = true;
@@ -187,6 +197,10 @@ static void WriteDefaultIni(const std::wstring& path) {
         L"; 先发 WM_CLOSE 优雅关闭，超时后才强制结束（毫秒，200-30000）\r\n"
         L"GracefulTimeout=3000\r\n"
         L"\r\n"
+        L"; 是否允许关闭资源管理器窗口（1=允许，0=禁止）。\r\n"
+        L"; 无论开关如何，explorer.exe 都只做优雅关闭，永远不会被强制结束。\r\n"
+        L"AllowShellClose=1\r\n"
+        L"\r\n"
         L"; 额外保护的进程名，逗号分隔，例如 chrome.exe,notepad.exe\r\n"
         L"Protected=\r\n";
 
@@ -204,6 +218,7 @@ static void WriteDefaultIni(const std::wstring& path) {
 static void LoadConfig() {
     g_hotkey = Hotkey();
     g_gracefulMs = 3000;
+    g_allowShellClose = true;
     g_extraProtected.clear();
 
     const std::wstring path = IniPath();
@@ -219,6 +234,9 @@ static void LoadConfig() {
     if (t < 200) t = 200;
     if (t > 30000) t = 30000;
     g_gracefulMs = t;
+
+    g_allowShellClose =
+        GetPrivateProfileIntW(L"ctrlq", L"AllowShellClose", 1, path.c_str()) != 0;
 
     wchar_t prot[1024] = {};
     GetPrivateProfileStringW(L"ctrlq", L"Protected", L"", prot, ARRAYSIZE(prot), path.c_str());
@@ -252,12 +270,28 @@ static bool IsProtectedName(const wchar_t* base) {
     return false;
 }
 
+static bool IsGracefulOnlyName(const wchar_t* base) {
+    for (size_t i = 0; i < ARRAYSIZE(kGracefulOnly); ++i)
+        if (EqualsNoCase(base, kGracefulOnly[i])) return true;
+    return false;
+}
+
+// explorer.exe 同时托管桌面、任务栏和文件夹窗口，只有文件夹窗口该被放行。
+// 类名白名单比进程名更严格：即使黑名单被人改坏，也碰不到 Progman / Shell_TrayWnd。
+static bool IsShellFolderWindow(HWND hwnd) {
+    if (hwnd == GetShellWindow()) return false;
+    wchar_t cls[128] = {};
+    if (!GetClassNameW(hwnd, cls, ARRAYSIZE(cls))) return false;
+    return EqualsNoCase(cls, L"CabinetWClass") || EqualsNoCase(cls, L"ExploreWClass");
+}
+
 // 只接受"普通应用窗口"：可见、非工具窗口、顶层、有标题、不是桌面/任务栏
 static bool IsAppWindow(HWND hwnd) {
     if (!IsWindowVisible(hwnd)) return false;
     if (GetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return false;
     if (GetAncestor(hwnd, GA_ROOT) != hwnd) return false;
     if (GetWindowTextLengthW(hwnd) == 0) return false;
+    if (hwnd == GetShellWindow()) return false;   // 桌面
 
     wchar_t cls[128] = {};
     if (GetClassNameW(hwnd, cls, ARRAYSIZE(cls))) {
@@ -282,8 +316,7 @@ static bool WindowStillAlive(HWND hwnd, DWORD pid) {
     return owner == pid;
 }
 
-static void KillForeground() {
-    HWND hwnd = GetForegroundWindow();
+static void CloseAppWindow(HWND hwnd) {
     if (!hwnd || !IsAppWindow(hwnd)) return;
 
     DWORD pid = 0;
@@ -309,7 +342,17 @@ static void KillForeground() {
     const wchar_t* base = wcsrchr(path, L'\\');
     base = base ? base + 1 : path;
 
-    if (IsProtectedName(base)) { CloseHandle(h); return; }
+    Policy policy;
+    if (IsProtectedName(base)) {
+        policy = POLICY_DENY;
+    } else if (IsGracefulOnlyName(base)) {
+        // 外壳进程：只放行文件夹窗口，且只允许优雅关闭
+        policy = (g_allowShellClose && IsShellFolderWindow(hwnd)) ? POLICY_GRACEFUL_ONLY
+                                                                 : POLICY_DENY;
+    } else {
+        policy = POLICY_ALLOW;
+    }
+    if (policy == POLICY_DENY) { CloseHandle(h); return; }
 
     PfnIsProcessCritical isCritical = GetIsProcessCritical();
     if (isCritical) {
@@ -317,9 +360,13 @@ static void KillForeground() {
         if (isCritical(h, &critical) && critical) { CloseHandle(h); return; }
     }
 
+    // 只有 Allow 档才允许强杀；GracefulOnly 即使拿到了 TERMINATE 权限也不用
+    const bool mayTerminate = (policy == POLICY_ALLOW) && canTerminate;
+
     // 只关"这一个窗口"：成功后进程可能还活着（同一个 exe 的其它窗口），
     // 那是应用自己的事，不能因为进程没退出就把它的所有窗口一起杀掉。
-    const DWORD budget = (DWORD)g_gracefulMs;
+    DWORD budget = (DWORD)g_gracefulMs;
+    if (policy == POLICY_GRACEFUL_ONLY && budget > 1500) budget = 1500;
     const DWORD start = GetTickCount();
 
     if (IsWindow(hwnd)) {
@@ -342,9 +389,14 @@ static void KillForeground() {
         WaitForSingleObject(h, slice);
     }
 
-    // 窗口一直没消失 = 应用没响应 WM_CLOSE（卡住或无窗口过程），才强杀进程
-    if (canTerminate) TerminateProcess(h, 0);
+    // 窗口一直没消失 = 应用没响应 WM_CLOSE（卡住或无窗口过程），才强杀进程。
+    // GracefulOnly（explorer.exe）永远不会走到强杀：宁可关不掉，也不能闪掉整个外壳。
+    if (mayTerminate) TerminateProcess(h, 0);
     CloseHandle(h);
+}
+
+static void KillForeground() {
+    CloseAppWindow(GetForegroundWindow());
 }
 
 static DWORD WINAPI WorkerProc(LPVOID) {

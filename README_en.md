@@ -32,6 +32,9 @@ Hotkey=Ctrl+Q
 ; milliseconds to wait after WM_CLOSE (200-30000)
 GracefulTimeout=3000
 
+; allow closing File Explorer windows (1=yes, 0=no)
+AllowShellClose=1
+
 ; extra protected process names, comma separated
 Protected=
 ```
@@ -91,11 +94,23 @@ thicker strokes so the shape survives at tray size. The design source is `make_i
 Three checks run in order; failing any one aborts the operation:
 
 1. **Critical process**: `IsProcessCritical()` (Windows 8.1+), decided by the kernel
-2. **Built-in guard list**: `explorer.exe`, `dwm.exe`, `sihost.exe`, `taskhostw.exe`,
+2. **Built-in guard list**: `dwm.exe`, `sihost.exe`, `taskhostw.exe`,
    `ShellExperienceHost.exe`, `StartMenuExperienceHost.exe`, `ctfmon.exe`, `audiodg.exe`,
    `fontdrvhost.exe`, `csrss.exe`, `winlogon.exe`, `lsass.exe`, plus your `Protected=` entries
 3. **Window admission**: the target must be a visible top-level window with a title, not a
    `WS_EX_TOOLWINDOW`, and not a shell window (`Progman`, `WorkerW`, `Shell_TrayWnd`, ...)
+
+Processes fall into three tiers:
+
+| Tier | Applies to | Behaviour |
+|---|---|---|
+| `Deny` | critical processes, guard list, `Protected=` | abort |
+| `GracefulOnly` | `explorer.exe` | `WM_CLOSE` only, **never force-killed** |
+| `Allow` | everything else | `WM_CLOSE`, force-kill on timeout |
+
+`explorer.exe` also hosts the desktop and taskbar, so it gets two extra guards: only
+`CabinetWClass` / `ExploreWClass` folder windows are accepted, and `GetShellWindow()` excludes the
+desktop. Set `AllowShellClose=0` to put it back into the `Deny` tier.
 
 If the process path cannot be read, the tool **gives up** instead of killing an unknown PID.
 
@@ -106,6 +121,10 @@ If the process path cannot be read, the tool **gives up** instead of killing an 
 - **Data loss**: if the app ignores `WM_CLOSE` (e.g. shows a save prompt), it is force-killed
   after `GracefulTimeout`.
 - **Windows without a title**: some fullscreen games and UWP shell windows are skipped.
+- **Explorer is never force-killed**: `explorer.exe` only gets a graceful close. If the window is
+  hung, Ctrl+Q does nothing — that is intentional, since force-killing would blink out the desktop
+  and taskbar and drop every open folder window.
+- **Explorer tabs**: on Windows 11 all tabs of one window close together; that is app behaviour.
 
 ## How it works
 
@@ -116,9 +135,9 @@ hidden window (main thread)   on WM_APP_KILL: SetEvent, nothing else
     ↓
 worker thread                 OpenProcess(QUERY_LIMITED|SYNCHRONIZE|TERMINATE) once
                               ↓ the handle pins the object, so the PID cannot be recycled
-                              QueryFullProcessImageNameW → three checks
+                              QueryFullProcessImageNameW → tier check (Deny / GracefulOnly / Allow)
                               ↓
-                              WM_CLOSE → poll until the window is gone → TerminateProcess
+                              WM_CLOSE → poll until the window is gone → force-kill only if Allow
 ```
 
 Success is measured by **the target window disappearing**, not by the process exiting. When one exe
@@ -137,6 +156,14 @@ For learning and legitimate use only. Save your work first. The author is not re
 data loss or system issues caused by this tool.
 
 ## Version history
+
+### v1.1.2
+- File Explorer folder windows can now be closed: `explorer.exe` moved to a `GracefulOnly` tier
+  that only ever sends `WM_CLOSE`
+- That tier is limited to `CabinetWClass` / `ExploreWClass` windows; desktop and taskbar are
+  unaffected
+- New `AllowShellClose` switch disables the behaviour entirely
+- `CloseAppWindow(HWND)` entry point added, so a single window's behaviour can be tested
 
 ### v1.1.1
 - Success criterion changed from "process exited" to "target window gone", so sibling windows are no longer closed
